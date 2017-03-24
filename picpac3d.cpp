@@ -695,6 +695,10 @@ namespace picpac {
             }
         };
 
+        static float l2norm (glm::vec3 const &p) {
+            return std::sqrt(p[0]*p[0] + p[1]*p[1] + p[2]*p[2]);
+        }
+
         PyObject *generate_labels (glm::vec3 center, glm::vec3 rotate, float scale0, vector<Nodule> const &from_nodules) const { //std::default_random_engine &rng) {
 
             CHECK_POWER_OF_TWO(config.factor);
@@ -710,11 +714,19 @@ namespace picpac {
             float cs2 = cs/2.0;
             vector<Nodule> nodules;
             scale0 *= config.factor;
+            glm::vec3 cc(cs2, cs2, cs2);
+            static constexpr float SQRT3 = 1.7320508075688772;
+            float box_radius = cs2 * SQRT3;
+
             for (auto const &nod: from_nodules) {
                 Nodule nnod;
                 nnod.pos = glm::vec3(unrotate*glm::vec4(nod.pos - center, 1))/scale0 + cs2;
                 nnod.radius = nod.radius/scale0;
-                nodules.push_back(nnod);
+
+                float dist = l2norm(cc - nnod.pos);
+                if (dist < nnod.radius + box_radius) {
+                    nodules.push_back(nnod);
+                }
             }
 
             if (nodules.empty()) return 0;
