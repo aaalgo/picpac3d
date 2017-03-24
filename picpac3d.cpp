@@ -1025,12 +1025,12 @@ using namespace picpac;
 
 struct CubicLibGuard {
     CubicLibGuard() {
-		LOG(INFO) << "Initializing CUBIC library";
+		LOG(INFO) << "Initializing PicPac3D library";
         import_array();
 		//CHECK(globalSampler);
 	}
     ~CubicLibGuard() {
-		LOG(INFO) << "Cleaning CUBIC library";
+		LOG(INFO) << "Cleaning PicPac3D library";
         globalSampler = 0;
 		//delete globalSampler;
         for (auto &cube: global_cube_pool) {
