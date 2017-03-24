@@ -541,7 +541,6 @@ PyArrayObject *h265decode_array (const_buffer buf, Json const &meta) {
     CHECK(array->strides[1] == X);
     CHECK(array->strides[2] == 1);
 
-
     uint8_t *to_z = (uint8_t *)array->data;
     int cnt_z = 0;
     h265decode(buf, [&to_z, &cnt_z, Y, X, array](const de265_image* img) {
@@ -563,6 +562,55 @@ PyArrayObject *h265decode_array (const_buffer buf, Json const &meta) {
         }
     });
     CHECK(cnt_z == Z);
+    return array;
+}
+
+PyArrayObject *h265decode_array_sampled (const_buffer buf, Json const &meta, unsigned off, unsigned step) {
+    int Z = meta["size"].array_items()[0].int_value();
+    int Y = meta["size"].array_items()[1].int_value();
+    int X = meta["size"].array_items()[2].int_value();
+    int SZ = 0;
+    for (int i = off; i < Z; i += step) {
+        ++SZ;   // count output size
+    }
+    if (SZ == 0) return 0;
+    
+    npy_intp dims[] = {SZ, Y, X};
+    // allocate storage
+    PyArrayObject *array = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
+    CHECK(array);
+    CHECK(array->strides[0] == X*Y);
+    CHECK(array->strides[1] == X);
+    CHECK(array->strides[2] == 1);
+
+    uint8_t *to_z = (uint8_t *)array->data;
+    int z = 0;
+    int next = off;
+    h265decode(buf, [&to_z, &z, &next, &step, Y, X, array](const de265_image* img) {
+        if (z < next) {
+            z++;
+            return;
+        }
+        next += step;
+        z++;
+
+        int cols = de265_get_image_width(img, 0);
+        int rows = de265_get_image_height(img, 0);
+        CHECK(rows == Y);
+        CHECK(cols == X);
+        CHECK(de265_get_chroma_format(img) == de265_chroma_mono);
+        CHECK(de265_get_bits_per_pixel(img, 0) == 8);
+        int stride;
+        const uint8_t* frame = de265_get_image_plane(img, 0, &stride);
+        // copy
+
+        uint8_t *to_y = to_z;
+        to_z += array->strides[0];
+        for (int i = 0; i < rows; ++i, to_y += array->strides[1], frame += stride) {
+            memcpy(to_y, frame, cols * sizeof(uint8_t));
+        }
+    });
+    CHECK(to_z == (uint8_t *)array->data + array->strides[0] * SZ);
     return array;
 }
 
@@ -933,6 +981,7 @@ namespace picpac {
 
     class VolumeLoader: public ImageLoader {
         static void dummy_record_reader (Record *) {
+            CHECK(false) << "Dummy record reader should never be invoked.";
         }
     public:
         struct Config: public ImageLoader::Config {
@@ -951,42 +1000,43 @@ namespace picpac {
             string err;
             Json json = Json::parse(r.field_string(1), err);
 
-            PyArrayObject *array = h265decode_array(r.field(0), json);
+            unsigned off = 0;
+            if (config.perturb) off = p.shiftx % config.stride;
+
+            std::mutex dummy_mutex;
+            CHECK(config.stride > 0);
+            PyArrayObject *array = h265decode_array_sampled(r.field(0), json, off, config.stride);
             CHECK(array);
             CHECK(array->flags & NPY_ARRAY_C_CONTIGUOUS);
             if (config.perturb) {
-                CHECK(array->dimensions[0] > config.stride);
-                CHECK(config.stride > 0);
-                // do perturbation
-                unsigned first = p.shiftx % config.stride;
                 ImageLoader::CacheValue cache;
-                ImageLoader::CacheValue loaded;
+                ImageLoader::Value loaded;
                 cache.label = 0;
-                uint8_t *z = (uint8_t *)array->data + first * array->strides[0];
+                cache.annotation = cv::Mat();
+                uint8_t *z = (uint8_t *)array->data;
                 cache.image = cv::Mat(array->dimensions[1], array->dimensions[2], CV_8U, (void *)z);
-                ImageLoader::load(dummy_record_reader,p, &loaded, &cache, m);
+                ImageLoader::load(dummy_record_reader,p, &loaded, &cache, &dummy_mutex);
                 CHECK(loaded.image.rows > 0);
-                CHECK(loaded.image.type() == CV_32F);
+                CHECK(loaded.image.type() == CV_8U);
 
-                int Z = (array->dimensions[0] - first + config.stride - 1) / config.stride;
-                npy_intp dims[] = {Z, loaded.image.rows, loaded.image.cols};
+                npy_intp dims[] = {array->dimensions[0], loaded.image.rows, loaded.image.cols};
                 // allocate storage
-                PyArrayObject *oarray = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_FLOAT32);
+                PyArrayObject *oarray = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
                 CHECK(oarray);
                 CHECK(oarray->flags & NPY_ARRAY_C_CONTIGUOUS);
-                float *to_z = (float *)array->data;
+                uint8_t *to_z = (uint8_t *)oarray->data;
                 int total = loaded.image.rows * loaded.image.cols;
-                float const *xxx = loaded.image.ptr<float const>(0);
+                uint8_t const *xxx = loaded.image.ptr<uint8_t const>(0);
                 std::copy(xxx, xxx + total, to_z);
-                for (int i = 1; i < Z; ++i) {
-                    z += array->strides[0] * config.stride;
+                for (int i = 1; i < array->dimensions[0]; ++i) {
+                    z += array->strides[0];
                     to_z += total;
                     cache.image = cv::Mat(array->dimensions[1], array->dimensions[2], CV_8U, (void *)z);
-                    ImageLoader::load(dummy_record_reader,p, &loaded, &cache, m);
+                    ImageLoader::load(dummy_record_reader,p, &loaded, &cache, &dummy_mutex);
                     CHECK(loaded.image.rows == dims[1]);
                     CHECK(loaded.image.cols == dims[2]);
-                    CHECK(loaded.image.type() == CV_32F);
-                    float const *xxx = loaded.image.ptr<float const>(0);
+                    CHECK(loaded.image.type() == CV_8U);
+                    xxx = loaded.image.ptr<uint8_t const>(0);
                     std::copy(xxx, xxx + total, to_z);
                 }
                 Py_CLEAR(array);
