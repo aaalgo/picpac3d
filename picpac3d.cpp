@@ -498,18 +498,7 @@ public:
     }
 };
 
-PyArrayObject *h265decode (const_buffer buf, Json const &meta) {
-    int Z = meta["size"].array_items()[0].int_value();
-    int Y = meta["size"].array_items()[1].int_value();
-    int X = meta["size"].array_items()[2].int_value();
-    npy_intp dims[] = {Z, Y, X};
-    // allocate storage
-    PyArrayObject *array = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
-    CHECK(array);
-    CHECK(array->strides[0] == X*Y);
-    CHECK(array->strides[1] == X);
-    CHECK(array->strides[2] == 1);
-
+void h265decode (const_buffer buf, std::function<void(de265_image const *)> callback) {
     de265_decoder_context* ctx = de265_new_decoder();
     CHECK(ctx);
     de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_BOOL_SEI_CHECK_HASH, true);
@@ -523,8 +512,6 @@ PyArrayObject *h265decode (const_buffer buf, Json const &meta) {
     err = de265_flush_data(ctx);
     CHECK(err == DE265_OK);
     int more = 1;
-    uint8_t *to_z = (uint8_t *)array->data;
-    int cnt_z = 0;
     while (more) {
         err = de265_decode(ctx, &more);
         if (err != DE265_OK) break;
@@ -537,6 +524,27 @@ PyArrayObject *h265decode (const_buffer buf, Json const &meta) {
             fprintf(stderr,"WARNING: %s\n", de265_get_error_text(warning));
         }
         if (!img) continue;
+        callback(img);
+	}
+	de265_free_decoder(ctx);
+}
+
+PyArrayObject *h265decode_array (const_buffer buf, Json const &meta) {
+    int Z = meta["size"].array_items()[0].int_value();
+    int Y = meta["size"].array_items()[1].int_value();
+    int X = meta["size"].array_items()[2].int_value();
+    npy_intp dims[] = {Z, Y, X};
+    // allocate storage
+    PyArrayObject *array = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
+    CHECK(array);
+    CHECK(array->strides[0] == X*Y);
+    CHECK(array->strides[1] == X);
+    CHECK(array->strides[2] == 1);
+
+
+    uint8_t *to_z = (uint8_t *)array->data;
+    int cnt_z = 0;
+    h265decode(buf, [&to_z, &cnt_z, Y, X, array](const de265_image* img) {
         int cols = de265_get_image_width(img, 0);
         int rows = de265_get_image_height(img, 0);
         CHECK(rows == Y);
@@ -553,9 +561,8 @@ PyArrayObject *h265decode (const_buffer buf, Json const &meta) {
         for (int i = 0; i < rows; ++i, to_y += array->strides[1], frame += stride) {
             memcpy(to_y, frame, cols * sizeof(uint8_t));
         }
-	}
+    });
     CHECK(cnt_z == Z);
-	de265_free_decoder(ctx);
     return array;
 }
 
@@ -602,7 +609,7 @@ object decode (string const &v, int Z, int Y, int X) {
     Json meta = Json::object{
         {"size", Json::array{Z, Y, X}}
     };
-    return object(handle<>((PyObject *)h265decode(const_buffer(&v[0], v.size()), meta)));
+    return object(handle<>((PyObject *)h265decode_array(const_buffer(&v[0], v.size()), meta)));
 }
 
 namespace picpac {
@@ -765,7 +772,7 @@ namespace picpac {
                 string err;
                 Json json = Json::parse(r.field_string(1), err);
 
-                PyArrayObject *array = h265decode(r.field(0), json);
+                PyArrayObject *array = h265decode_array(r.field(0), json);
                 CHECK(array);
 
                 glm::ivec3 off, len, shift;
@@ -944,7 +951,7 @@ namespace picpac {
             string err;
             Json json = Json::parse(r.field_string(1), err);
 
-            PyArrayObject *array = h265decode(r.field(0), json);
+            PyArrayObject *array = h265decode_array(r.field(0), json);
             CHECK(array);
             CHECK(array->flags & NPY_ARRAY_C_CONTIGUOUS);
             if (config.perturb) {
