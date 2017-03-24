@@ -1,0 +1,3 @@
+[submodule "picpac"]
+	path = picpac
+	url = http://github.com/aaalgo/picpac
