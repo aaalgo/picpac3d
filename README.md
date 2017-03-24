@@ -7,3 +7,6 @@ Highlights:
 - Lossless storing 8-bit volumetric data with H265.
 - On-the-fly region sampling with OpenGL.
 
+```
+git submodule update --init --recursive
+```
