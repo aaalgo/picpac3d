@@ -58,6 +58,51 @@ void main(){
 }
 )gl";
 
+struct Tensor3 {
+    typedef uint8_t T;
+    bool own;
+    char *data;
+    npy_intp dimensions[3];
+    npy_intp strides[3];
+    Tensor3 (int Z, int Y, int X, bool zero = false): own(true) {
+        if (zero) {
+            data = (char *)calloc(Z * Y * X, sizeof(T));
+        }
+        else {
+            data = (char *)malloc(Z * Y * X * sizeof(T));
+        }
+        dimensions[0] = Z;
+        dimensions[1] = Y;
+        dimensions[2] = X;
+        strides[0] = Y * X * sizeof(T);
+        strides[1] = X * sizeof(T);
+        strides[2] = sizeof(T);
+    }
+    Tensor3 (PyObject *_array): own(false) {
+        PyArrayObject *array = (PyArrayObject *)_array;
+        CHECK(array->nd == 3);
+        dimensions[0] = array->dimensions[0];
+        dimensions[1] = array->dimensions[1];
+        dimensions[2] = array->dimensions[2];
+        strides[0] = array->strides[0];
+        strides[1] = array->strides[1];
+        strides[2] = array->strides[2];
+        data = array->data;
+    }
+    ~Tensor3 () {
+        if (own && data) free(data);
+    }
+    object to_npy_and_delete () {
+        CHECK(own);
+        PyObject *array = PyArray_SimpleNewFromData(3, dimensions, NPY_UINT8, data);
+        PyArrayObject *a = (PyArrayObject *)array;
+        a->flags |= NPY_OWNDATA;
+        data = 0;
+        delete this;
+        return object(boost::python::handle<>(array));
+    }
+};
+
 GLuint LoadShader (GLenum shaderType, string const &buf) {
 	GLuint ShaderID = glCreateShader(shaderType);
 	GLint Result = GL_FALSE;
@@ -235,8 +280,8 @@ public:
     }
 
     void texture_direct (PyObject *_array) {
-        check_thread();
         PyArrayObject *array = (PyArrayObject *)_array;
+        check_thread();
         CHECK(array->dimensions[0] == VOLUME_SIZE);
         CHECK(array->dimensions[1] == VOLUME_SIZE);
         CHECK(array->dimensions[2] == VOLUME_SIZE);
@@ -250,7 +295,7 @@ public:
         glUniform1i(sampler, 0);
     }
 
-    void texture (PyArrayObject *array, glm::ivec3 *off, glm::ivec3 *len, glm::ivec3 *shift) {
+    void texture (Tensor3 *array, glm::ivec3 *off, glm::ivec3 *len, glm::ivec3 *shift) {
         check_thread();
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_3D, itexture);
@@ -296,14 +341,15 @@ public:
     }
 
     void texture_indirect (PyObject *array) {
+        Tensor3 view(array);
         glm::ivec3 a, b, c;
-        texture((PyArrayObject *)array, &a, &b, &c);
+        texture(&view, &a, &b, &c);
         cout << "OFF: " << a[0] << ' ' << a[1] << ' ' << a[2] << endl;
         cout << "LEN: " << b[0] << ' ' << b[1] << ' ' << b[2] << endl;
         cout << "SHI: " << c[0] << ' ' << c[1] << ' ' << c[2] << endl;
     }
 
-    PyObject *sample (glm::vec3 center, glm::vec3 rotate, float scale0) { //std::default_random_engine &rng) {
+    Tensor3 *sample (glm::vec3 center, glm::vec3 rotate, float scale0) { //std::default_random_engine &rng) {
         check_thread();
         // 1 -> scale -> rotate -> shift
         float scale = scale0 * CUBE_SIZE / VOLUME_SIZE;
@@ -329,14 +375,8 @@ public:
 
         glFinish();
 
-        npy_intp dims[] = {CUBE_SIZE, CUBE_SIZE, CUBE_SIZE};
-        PyObject *_oarray = PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
-        PyArrayObject *oarray = (PyArrayObject*)_oarray;
-
-        CHECK(oarray->strides[2] == 1);
-        CHECK(oarray->strides[1] == CUBE_SIZE);
-        CHECK(oarray->strides[0] == CUBE_SIZE * CUBE_SIZE);
-        memset(oarray->data, 0, CUBE_SIZE * CUBE_SIZE * CUBE_SIZE);
+        Tensor3 *oarray = new Tensor3(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE, true);
+        CHECK(oarray);
 
         glBindTexture(GL_TEXTURE_2D, otexture);
         GLint v;
@@ -347,11 +387,11 @@ public:
 
         glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, oarray->data);
 
-        return _oarray;
+        return oarray;
     }
 
     object sample_simple (float x, float y, float z, float phi, float theta, float kappa, float scale) {
-        return object(boost::python::handle<>(sample(glm::vec3(x, y, z), glm::vec3(phi, theta, kappa), scale)));
+        return sample(glm::vec3(x, y, z), glm::vec3(phi, theta, kappa), scale)->to_npy_and_delete();
     }
 
     ~Sampler () {
@@ -498,6 +538,123 @@ public:
     }
 };
 
+class H265Decoder {
+    mutable de265_decoder_context* ctx;
+    mutable std::mutex mutex;
+public:
+    H265Decoder (unsigned threads=1): ctx(de265_new_decoder()) {
+        CHECK(ctx);
+        de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_BOOL_SEI_CHECK_HASH, true);
+        de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_SUPPRESS_FAULTY_PICTURES, false);
+        de265_start_worker_threads(ctx, threads);
+    }
+    void decode (const_buffer buf, std::function<void(de265_image const *)> callback) const {
+        std::lock_guard<std::mutex> lock(mutex);
+
+        de265_error err = de265_push_data(ctx,
+                boost::asio::buffer_cast<void const *>(buf),
+                boost::asio::buffer_size(buf),
+                0, (void *)2);
+        CHECK(err == DE265_OK);
+        err = de265_flush_data(ctx);
+        CHECK(err == DE265_OK);
+        int more = 1;
+        while (more) {
+            err = de265_decode(ctx, &more);
+            if (err != DE265_OK) break;
+            const de265_image* img = de265_get_next_picture(ctx);
+            for (;;) {
+                de265_error warning = de265_get_warning(ctx);
+                if (warning==DE265_OK) {
+                    break;
+                }
+                fprintf(stderr,"WARNING: %s\n", de265_get_error_text(warning));
+            }
+            if (!img) continue;
+            callback(img);
+        }
+    }
+    Tensor3 *decode_array (const_buffer buf, Json const &meta) const {
+        int Z = meta["size"].array_items()[0].int_value();
+        int Y = meta["size"].array_items()[1].int_value();
+        int X = meta["size"].array_items()[2].int_value();
+        // allocate storage
+        Tensor3 *array = new Tensor3(Z, Y, X);
+        CHECK(array);
+
+        uint8_t *to_z = (uint8_t *)array->data;
+        int cnt_z = 0;
+        decode(buf, [&to_z, &cnt_z, Y, X, array](const de265_image* img) {
+            int cols = de265_get_image_width(img, 0);
+            int rows = de265_get_image_height(img, 0);
+            CHECK(rows == Y);
+            CHECK(cols == X);
+            CHECK(de265_get_chroma_format(img) == de265_chroma_mono);
+            CHECK(de265_get_bits_per_pixel(img, 0) == 8);
+            int stride;
+            const uint8_t* frame = de265_get_image_plane(img, 0, &stride);
+            // copy
+
+            uint8_t *to_y = to_z;
+            to_z += array->strides[0];
+            ++cnt_z;
+            for (int i = 0; i < rows; ++i, to_y += array->strides[1], frame += stride) {
+                memcpy(to_y, frame, cols * sizeof(uint8_t));
+            }
+        });
+        CHECK(cnt_z == Z);
+        return array;
+    }
+    Tensor3 *decode_array_sampled (const_buffer buf, Json const &meta, unsigned off, unsigned step) const {
+        int Z = meta["size"].array_items()[0].int_value();
+        int Y = meta["size"].array_items()[1].int_value();
+        int X = meta["size"].array_items()[2].int_value();
+        int SZ = 0;
+        for (int i = off; i < Z; i += step) {
+            ++SZ;   // count output size
+        }
+        if (SZ == 0) return 0;
+        
+        // allocate storage
+        Tensor3 *array = new Tensor3(SZ, Y, X);
+        CHECK(array);
+
+        uint8_t *to_z = (uint8_t *)array->data;
+        int z = 0;
+        int next = off;
+        decode(buf, [&to_z, &z, &next, &step, Y, X, array](const de265_image* img) {
+            if (z < next) {
+                z++;
+                return;
+            }
+            next += step;
+            z++;
+
+            int cols = de265_get_image_width(img, 0);
+            int rows = de265_get_image_height(img, 0);
+            CHECK(rows == Y);
+            CHECK(cols == X);
+            CHECK(de265_get_chroma_format(img) == de265_chroma_mono);
+            CHECK(de265_get_bits_per_pixel(img, 0) == 8);
+            int stride;
+            const uint8_t* frame = de265_get_image_plane(img, 0, &stride);
+            // copy
+
+            uint8_t *to_y = to_z;
+            to_z += array->strides[0];
+            for (int i = 0; i < rows; ++i, to_y += array->strides[1], frame += stride) {
+                memcpy(to_y, frame, cols * sizeof(uint8_t));
+            }
+        });
+        CHECK(to_z == (uint8_t *)array->data + array->strides[0] * SZ);
+        return array;
+    }
+
+    ~H265Decoder () {
+	    de265_free_decoder(ctx);
+    }
+};
+
 void h265decode (const_buffer buf, std::function<void(de265_image const *)> callback, unsigned threads = 1) {
     de265_decoder_context* ctx = de265_new_decoder();
     CHECK(ctx);
@@ -529,90 +686,6 @@ void h265decode (const_buffer buf, std::function<void(de265_image const *)> call
 	de265_free_decoder(ctx);
 }
 
-PyArrayObject *h265decode_array (const_buffer buf, Json const &meta, unsigned threads = 1) {
-    int Z = meta["size"].array_items()[0].int_value();
-    int Y = meta["size"].array_items()[1].int_value();
-    int X = meta["size"].array_items()[2].int_value();
-    npy_intp dims[] = {Z, Y, X};
-    // allocate storage
-    PyArrayObject *array = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
-    CHECK(array);
-    CHECK(array->strides[0] == X*Y);
-    CHECK(array->strides[1] == X);
-    CHECK(array->strides[2] == 1);
-
-    uint8_t *to_z = (uint8_t *)array->data;
-    int cnt_z = 0;
-    h265decode(buf, [&to_z, &cnt_z, Y, X, array](const de265_image* img) {
-        int cols = de265_get_image_width(img, 0);
-        int rows = de265_get_image_height(img, 0);
-        CHECK(rows == Y);
-        CHECK(cols == X);
-        CHECK(de265_get_chroma_format(img) == de265_chroma_mono);
-        CHECK(de265_get_bits_per_pixel(img, 0) == 8);
-        int stride;
-        const uint8_t* frame = de265_get_image_plane(img, 0, &stride);
-        // copy
-
-        uint8_t *to_y = to_z;
-        to_z += array->strides[0];
-        ++cnt_z;
-        for (int i = 0; i < rows; ++i, to_y += array->strides[1], frame += stride) {
-            memcpy(to_y, frame, cols * sizeof(uint8_t));
-        }
-    }, threads);
-    CHECK(cnt_z == Z);
-    return array;
-}
-
-PyArrayObject *h265decode_array_sampled (const_buffer buf, Json const &meta, unsigned off, unsigned step) {
-    int Z = meta["size"].array_items()[0].int_value();
-    int Y = meta["size"].array_items()[1].int_value();
-    int X = meta["size"].array_items()[2].int_value();
-    int SZ = 0;
-    for (int i = off; i < Z; i += step) {
-        ++SZ;   // count output size
-    }
-    if (SZ == 0) return 0;
-    
-    npy_intp dims[] = {SZ, Y, X};
-    // allocate storage
-    PyArrayObject *array = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
-    CHECK(array);
-    CHECK(array->strides[0] == X*Y);
-    CHECK(array->strides[1] == X);
-    CHECK(array->strides[2] == 1);
-
-    uint8_t *to_z = (uint8_t *)array->data;
-    int z = 0;
-    int next = off;
-    h265decode(buf, [&to_z, &z, &next, &step, Y, X, array](const de265_image* img) {
-        if (z < next) {
-            z++;
-            return;
-        }
-        next += step;
-        z++;
-
-        int cols = de265_get_image_width(img, 0);
-        int rows = de265_get_image_height(img, 0);
-        CHECK(rows == Y);
-        CHECK(cols == X);
-        CHECK(de265_get_chroma_format(img) == de265_chroma_mono);
-        CHECK(de265_get_bits_per_pixel(img, 0) == 8);
-        int stride;
-        const uint8_t* frame = de265_get_image_plane(img, 0, &stride);
-        // copy
-
-        uint8_t *to_y = to_z;
-        to_z += array->strides[0];
-        for (int i = 0; i < rows; ++i, to_y += array->strides[1], frame += stride) {
-            memcpy(to_y, frame, cols * sizeof(uint8_t));
-        }
-    });
-    CHECK(to_z == (uint8_t *)array->data + array->strides[0] * SZ);
-    return array;
-}
 
 string encode (PyObject *_array) {
     ostringstream ss;
@@ -657,7 +730,8 @@ object decode (string const &v, int Z, int Y, int X) {
     Json meta = Json::object{
         {"size", Json::array{Z, Y, X}}
     };
-    return object(handle<>((PyObject *)h265decode_array(const_buffer(&v[0], v.size()), meta)));
+    H265Decoder dec;
+    return dec.decode_array(const_buffer(&v[0], v.size()), meta)->to_npy_and_delete();
 }
 
 namespace picpac {
@@ -710,8 +784,8 @@ namespace picpac {
     std::mutex global_lock;
 
     struct Cube {
-        PyObject *images;
-        PyObject *labels;
+        Tensor3 *images;
+        Tensor3 *labels;
     };
 
     vector<Cube> global_cube_pool;
@@ -730,9 +804,11 @@ namespace picpac {
             }
         } config;
 
+        H265Decoder dec;
+
         typedef Cube Value;
 
-        CubeLoader (Config const &config_): ImageLoader(config_), config(config_) {
+        CubeLoader (Config const &config_): ImageLoader(config_), config(config_), dec(config_.decode_threads) {
         }
 
         struct Nodule {
@@ -755,7 +831,7 @@ namespace picpac {
             return std::sqrt(p[0]*p[0] + p[1]*p[1] + p[2]*p[2]);
         }
 
-        PyObject *generate_labels (glm::vec3 center, glm::vec3 rotate, float scale0, vector<Nodule> const &from_nodules) const { //std::default_random_engine &rng) {
+        Tensor3 *generate_labels (glm::vec3 center, glm::vec3 rotate, float scale0, vector<Nodule> const &from_nodules) const { //std::default_random_engine &rng) {
 
             CHECK_POWER_OF_TWO(config.factor);
             // 1. convert nodules to cube location
@@ -786,10 +862,8 @@ namespace picpac {
             }
 
             if (nodules.empty()) return 0;
-            npy_intp dims[] = {cs, cs, cs};
-            PyObject *_array = PyArray_ZEROS(3, &dims[0], NPY_UINT8, 0);
-            PyArrayObject *array = (PyArrayObject*)_array;
-            CHECK(array->flags & NPY_ARRAY_C_CONTIGUOUS);
+            Tensor3 *array = new Tensor3(cs, cs, cs, true);
+            CHECK(array);
             for (auto const &nod: nodules) {
                 float x = nod.pos[0];
                 float y = nod.pos[1];
@@ -807,7 +881,7 @@ namespace picpac {
                     cv::circle(image, cv::Point(int(round(x)), int(round(y))), r0, cv::Scalar(1), -1);
                 }
             }
-            return _array;
+            return array;
         }
 
 
@@ -821,7 +895,7 @@ namespace picpac {
                 string err;
                 Json json = Json::parse(r.field_string(1), err);
 
-                PyArrayObject *array = h265decode_array(r.field(0), json, config.decode_threads);
+                Tensor3 *array = dec.decode_array(r.field(0), json);
                 CHECK(array);
 
                 glm::ivec3 off, len, shift;
@@ -918,15 +992,13 @@ namespace picpac {
                     Cube cube;
                     cube.images = globalSampler->sample(s.pos, s.angle, s.scale);
                     if (config.perturb) {
-                        PyArrayObject *array = (PyArrayObject *)cube.images;
-                        CHECK(array->flags & NPY_ARRAY_C_CONTIGUOUS);
-                        cv::Mat mat(Sampler::VIEW_SIZE, Sampler::VIEW_SIZE, CV_8U, array->data);
+                        cv::Mat mat(Sampler::VIEW_SIZE, Sampler::VIEW_SIZE, CV_8U, cube.images->data);
                         mat += delta_color(rng);
                     }
                     cube.labels = generate_labels(s.pos, s.angle, s.scale, nodules);
                     global_cube_pool.push_back(cube);
                 }
-                Py_CLEAR(array);
+                delete array;
                 std::shuffle(global_cube_pool.begin(), global_cube_pool.end(), rng);
             }
             CHECK(global_cube_pool.size());
@@ -938,18 +1010,17 @@ namespace picpac {
     class CubeStream: public PrefetchStream<CubeLoader> {
     public:
         CubeStream (std::string const &path, Config const &config) : PrefetchStream(fs::path(path), config) {
-            global_cube_pool.clear();
+            CHECK(global_cube_pool.empty());
         }
 
         tuple next () {
             Cube cube = PrefetchStream<CubeLoader>::next();
             if (cube.labels) {
-                return make_tuple(object(boost::python::handle<>(cube.images)),
-                              object(boost::python::handle<>(cube.labels)));
+                return make_tuple(cube.images->to_npy_and_delete(),
+                                  cube.labels->to_npy_and_delete());
             }
             else {
-                return make_tuple(object(boost::python::handle<>(cube.images)),
-                              object());
+                return make_tuple(cube.images->to_npy_and_delete(), object());
             }
         }
     };
@@ -966,6 +1037,7 @@ namespace picpac {
         PICPAC_CONFIG_UPDATE(config,samples1); 
         PICPAC_CONFIG_UPDATE(config,pool);
         PICPAC_CONFIG_UPDATE(config,factor);
+        PICPAC_CONFIG_UPDATE(config,decode_threads);
 #undef PICPAC_CONFIG_UPDATE
         CHECK(!config.cache) << "Cube stream should net be cached";
         if (!config.perturb) {
@@ -974,10 +1046,9 @@ namespace picpac {
             LOG(WARNING) << "FULL IMAGES are of 1/8 resolution (512 to 64)";
         }
         CHECK(config.channels == 1) << "Cube stream only supports 1 channels.";
+        CHECK(config.threads == 1);
         CHECK(config.pool > 0);
         LOG(WARNING) << "preload: " << config.preload;
-        config.decode_threads = config.threads;
-        config.threads = 1;
         return self.attr("__init__")(path, config);
     };
 
@@ -988,11 +1059,13 @@ namespace picpac {
     public:
         struct Config: public ImageLoader::Config {
             int stride;
-            Config (): stride(3) {
+            int decode_threads;
+            Config (): stride(3), decode_threads(1) {
             }
         } config;
-        typedef object Value;
-        VolumeLoader (Config const &config_): ImageLoader(config_), config(config_) {
+        H265Decoder dec;
+        typedef Tensor3* Value;
+        VolumeLoader (Config const &config_): ImageLoader(config_), config(config_), dec(config_.decode_threads) {
         }
         void load (RecordReader rr, PerturbVector const &p, Value *out,
             CacheValue *c = nullptr, std::mutex *m = nullptr) const {
@@ -1007,9 +1080,8 @@ namespace picpac {
 
             std::mutex dummy_mutex;
             CHECK(config.stride > 0);
-            PyArrayObject *array = h265decode_array_sampled(r.field(0), json, off, config.stride);
+            Tensor3 *array = dec.decode_array_sampled(r.field(0), json, off, config.stride);
             CHECK(array);
-            CHECK(array->flags & NPY_ARRAY_C_CONTIGUOUS);
             if (config.perturb) {
                 ImageLoader::CacheValue cache;
                 ImageLoader::Value loaded;
@@ -1021,11 +1093,9 @@ namespace picpac {
                 CHECK(loaded.image.rows > 0);
                 CHECK(loaded.image.type() == CV_8U);
 
-                npy_intp dims[] = {array->dimensions[0], loaded.image.rows, loaded.image.cols};
                 // allocate storage
-                PyArrayObject *oarray = (PyArrayObject *)PyArray_SimpleNew(3, &dims[0], NPY_UINT8);
+                Tensor3 *oarray = new Tensor3(array->dimensions[0], loaded.image.rows, loaded.image.cols);
                 CHECK(oarray);
-                CHECK(oarray->flags & NPY_ARRAY_C_CONTIGUOUS);
                 uint8_t *to_z = (uint8_t *)oarray->data;
                 int total = loaded.image.rows * loaded.image.cols;
                 uint8_t const *xxx = loaded.image.ptr<uint8_t const>(0);
@@ -1035,16 +1105,16 @@ namespace picpac {
                     to_z += total;
                     cache.image = cv::Mat(array->dimensions[1], array->dimensions[2], CV_8U, (void *)z);
                     ImageLoader::load(dummy_record_reader,p, &loaded, &cache, &dummy_mutex);
-                    CHECK(loaded.image.rows == dims[1]);
-                    CHECK(loaded.image.cols == dims[2]);
+                    CHECK(loaded.image.rows == oarray->dimensions[1]);
+                    CHECK(loaded.image.cols == oarray->dimensions[2]);
                     CHECK(loaded.image.type() == CV_8U);
                     xxx = loaded.image.ptr<uint8_t const>(0);
                     std::copy(xxx, xxx + total, to_z);
                 }
-                Py_CLEAR(array);
+                delete array;
                 array = oarray;
             }
-            *out = object(boost::python::handle<>((PyObject *)array));
+            *out = array;
         }
     };
 
@@ -1054,7 +1124,7 @@ namespace picpac {
             : PrefetchStream(fs::path(path), config) {
         }
         object next () {
-            return PrefetchStream<VolumeLoader>::next();
+            return PrefetchStream<VolumeLoader>::next()->to_npy_and_delete();
         }
     };
 
@@ -1067,9 +1137,11 @@ namespace picpac {
         C.P = extract<decltype(C.P)>(kwargs.get(#P, C.P))
         PICPAC_VOLUME_CONFIG_UPDATE_ALL(config);
         PICPAC_CONFIG_UPDATE(config, stride); 
+        PICPAC_CONFIG_UPDATE(config,decode_threads);
 #undef PICPAC_CONFIG_UPDATE
-        config.cache = false;
-        config.channels = 1;
+        CHECK(!config.cache);
+        CHECK(config.channels == 1);
+        CHECK(config.threads == 1);
         return self.attr("__init__")(path, config);
     };
 
@@ -1093,8 +1165,8 @@ struct CubicLibGuard {
         globalSampler = 0;
 		//delete globalSampler;
         for (auto &cube: global_cube_pool) {
-            Py_CLEAR(cube.images);
-            Py_CLEAR(cube.labels);
+            if (cube.images) delete cube.images;
+            if (cube.labels) delete cube.labels;
         }
         global_cube_pool.clear();
         x265_cleanup();
