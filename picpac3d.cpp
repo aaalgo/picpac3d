@@ -655,38 +655,6 @@ public:
     }
 };
 
-void h265decode (const_buffer buf, std::function<void(de265_image const *)> callback, unsigned threads = 1) {
-    de265_decoder_context* ctx = de265_new_decoder();
-    CHECK(ctx);
-    de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_BOOL_SEI_CHECK_HASH, true);
-    de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_SUPPRESS_FAULTY_PICTURES, false);
-    de265_start_worker_threads(ctx, threads);
-    de265_error err = de265_push_data(ctx,
-            boost::asio::buffer_cast<void const *>(buf),
-            boost::asio::buffer_size(buf),
-            0, (void *)2);
-    CHECK(err == DE265_OK);
-    err = de265_flush_data(ctx);
-    CHECK(err == DE265_OK);
-    int more = 1;
-    while (more) {
-        err = de265_decode(ctx, &more);
-        if (err != DE265_OK) break;
-        const de265_image* img = de265_get_next_picture(ctx);
-        for (;;) {
-            de265_error warning = de265_get_warning(ctx);
-            if (warning==DE265_OK) {
-            	break;
-            }
-            fprintf(stderr,"WARNING: %s\n", de265_get_error_text(warning));
-        }
-        if (!img) continue;
-        callback(img);
-	}
-	de265_free_decoder(ctx);
-}
-
-
 string encode (PyObject *_array) {
     ostringstream ss;
     PyArrayObject *array((PyArrayObject *)_array);
