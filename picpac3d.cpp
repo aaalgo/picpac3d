@@ -498,12 +498,12 @@ public:
     }
 };
 
-void h265decode (const_buffer buf, std::function<void(de265_image const *)> callback) {
+void h265decode (const_buffer buf, std::function<void(de265_image const *)> callback, unsigned threads = 1) {
     de265_decoder_context* ctx = de265_new_decoder();
     CHECK(ctx);
     de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_BOOL_SEI_CHECK_HASH, true);
     de265_set_parameter_bool(ctx, DE265_DECODER_PARAM_SUPPRESS_FAULTY_PICTURES, false);
-    de265_start_worker_threads(ctx, 1);
+    de265_start_worker_threads(ctx, threads);
     de265_error err = de265_push_data(ctx,
             boost::asio::buffer_cast<void const *>(buf),
             boost::asio::buffer_size(buf),
@@ -529,7 +529,7 @@ void h265decode (const_buffer buf, std::function<void(de265_image const *)> call
 	de265_free_decoder(ctx);
 }
 
-PyArrayObject *h265decode_array (const_buffer buf, Json const &meta) {
+PyArrayObject *h265decode_array (const_buffer buf, Json const &meta, unsigned threads = 1) {
     int Z = meta["size"].array_items()[0].int_value();
     int Y = meta["size"].array_items()[1].int_value();
     int X = meta["size"].array_items()[2].int_value();
@@ -560,7 +560,7 @@ PyArrayObject *h265decode_array (const_buffer buf, Json const &meta) {
         for (int i = 0; i < rows; ++i, to_y += array->strides[1], frame += stride) {
             memcpy(to_y, frame, cols * sizeof(uint8_t));
         }
-    });
+    }, threads);
     CHECK(cnt_z == Z);
     return array;
 }
@@ -725,7 +725,8 @@ namespace picpac {
             unsigned samples1;
             unsigned pool;
             unsigned factor;
-            Config (): samples0(4), samples1(4), pool(128), factor(1) {
+            unsigned decode_threads;
+            Config (): samples0(4), samples1(4), pool(128), factor(1), decode_threads(1) {
             }
         } config;
 
@@ -820,7 +821,7 @@ namespace picpac {
                 string err;
                 Json json = Json::parse(r.field_string(1), err);
 
-                PyArrayObject *array = h265decode_array(r.field(0), json);
+                PyArrayObject *array = h265decode_array(r.field(0), json, config.decode_threads);
                 CHECK(array);
 
                 glm::ivec3 off, len, shift;
@@ -972,10 +973,11 @@ namespace picpac {
             LOG(WARNING) << "NODULES are in original resolution";
             LOG(WARNING) << "FULL IMAGES are of 1/8 resolution (512 to 64)";
         }
-        CHECK(config.threads == 1) << "Cube stream only supports 1 threads.";
         CHECK(config.channels == 1) << "Cube stream only supports 1 channels.";
         CHECK(config.pool > 0);
         LOG(WARNING) << "preload: " << config.preload;
+        config.decode_threads = config.threads;
+        config.threads = 1;
         return self.attr("__init__")(path, config);
     };
 
