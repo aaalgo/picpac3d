@@ -813,7 +813,7 @@ namespace picpac {
             int cs = Sampler::CUBE_SIZE/config.factor;
             float cs2 = cs/2.0;
             vector<Nodule> nodules;
-            float scale = config.factor / scale0;
+            float scale = scale0 / config.factor;
             //scale0 *= config.factor;
             glm::vec3 cc(cs2, cs2, cs2);
             static constexpr float SQRT3 = 1.7320508075688772;
@@ -821,8 +821,8 @@ namespace picpac {
 
             for (auto const &nod: from_nodules) {
                 Nodule nnod;
-                nnod.pos = glm::vec3(unrotate*glm::vec4(nod.pos - center, 1))/scale + cs2;
-                nnod.radius = nod.radius/scale0;
+                nnod.pos = glm::vec3(unrotate*glm::vec4(nod.pos - center, 1)) * scale + cs2;
+                nnod.radius = nod.radius * scale;
 
                 float dist = l2norm(cc - nnod.pos);
                 if (dist < nnod.radius + box_radius) {
@@ -1119,6 +1119,37 @@ namespace picpac {
         self.attr("reset")();
         return self;
     };
+
+    // copied from picpac
+    class Writer: public FileWriter {
+    public:
+        Writer (string const &path): FileWriter(fs::path(path), FileWriter::COMPACT) {
+        }
+        void append (float label, string const &buf) {
+            Record record(label, buf);
+            FileWriter::append(record);
+        }
+
+        void append (string const &buf1, string const &buf2) {
+            Record record(0, buf1, buf2);
+            FileWriter::append(record);
+        }
+
+        void append (float label, string const &buf1, string const &buf2) {
+            Record record(label, buf1, buf2);
+            FileWriter::append(record);
+        }
+    };
+
+    void (Writer::*append1) (float, string const &) = &Writer::append;
+    void (Writer::*append2) (string const &, string const &) = &Writer::append;
+    void (Writer::*append3) (float, string const &, string const &) = &Writer::append;
+
+    void translate_eos (EoS const &)
+    {
+        // Use the Python 'C' API to set up an exception object
+        PyErr_SetNone(PyExc_StopIteration);
+    }
 }
 
 using namespace picpac;
@@ -1156,6 +1187,7 @@ BOOST_PYTHON_MODULE(picpac3d)
         ;
 
     numeric::array::set_module_and_type("numpy", "ndarray");
+    register_exception_translator<EoS>(&translate_eos);
     def("encode", ::encode);
     def("decode", ::decode);
     def("sampler", ::get_sampler);
@@ -1178,5 +1210,10 @@ BOOST_PYTHON_MODULE(picpac3d)
         .def("size", &VolumeStream::size)
         .def("reset", &VolumeStream::reset)
         ;
+    class_<Writer>("Writer", init<string>())
+        .def("append", append1)
+        .def("append", append2)
+        .def("append", append3)
+    ;
 }
 
