@@ -352,7 +352,7 @@ public:
     Tensor3 *sample (glm::vec3 center, glm::vec3 rotate, float scale0) { //std::default_random_engine &rng) {
         check_thread();
         // 1 -> scale -> rotate -> shift
-        float scale = scale0 * CUBE_SIZE / VOLUME_SIZE;
+        float scale = 1.0 * CUBE_SIZE / VOLUME_SIZE / scale0;
 
         /*
         cout << "CENTER: " << center[0] << ' ' << center[1] << ' ' << center[2] << endl;
@@ -813,14 +813,15 @@ namespace picpac {
             int cs = Sampler::CUBE_SIZE/config.factor;
             float cs2 = cs/2.0;
             vector<Nodule> nodules;
-            scale0 *= config.factor;
+            float scale = config.factor / scale0;
+            //scale0 *= config.factor;
             glm::vec3 cc(cs2, cs2, cs2);
             static constexpr float SQRT3 = 1.7320508075688772;
             float box_radius = cs2 * SQRT3;
 
             for (auto const &nod: from_nodules) {
                 Nodule nnod;
-                nnod.pos = glm::vec3(unrotate*glm::vec4(nod.pos - center, 1))/scale0 + cs2;
+                nnod.pos = glm::vec3(unrotate*glm::vec4(nod.pos - center, 1))/scale + cs2;
                 nnod.radius = nod.radius/scale0;
 
                 float dist = l2norm(cc - nnod.pos);
@@ -891,7 +892,7 @@ namespace picpac {
                 std::uniform_real_distribution<float> delta_color(-config.pert_color1, config.pert_color1);
                 std::uniform_real_distribution<float> phi(-M_PI/2, M_PI/2);
                 std::uniform_real_distribution<float> theta(-M_PI, M_PI);
-                std::uniform_real_distribution<float> kappa(-M_PI, M_PI);
+                std::uniform_real_distribution<float> kappa(-M_PI*config.pert_angle/180, M_PI * config.pert_angle/180);
                 std::uniform_real_distribution<float> linear_scale(config.pert_min_scale, config.pert_max_scale);
 
                 vector<Sample> samples;
