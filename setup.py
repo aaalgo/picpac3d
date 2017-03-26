@@ -4,7 +4,7 @@ picpac3d = Extension('picpac3d',
         language = 'c++',
         extra_compile_args = ['-O3', '-std=c++1y'], 
         libraries = ['opencv_highgui', 'opencv_core', 'boost_filesystem', 'boost_system', 'boost_python', 'glog', 'x265', 'de265', 'glfw', 'GLEW', 'GL'],
-        include_dirs = ['/usr/local/include'],
+        include_dirs = ['/usr/local/include', 'picpac'],
         library_dirs = ['/usr/local/lib'],
         sources = ['picpac3d.cpp', 'picpac/picpac.cpp', 'picpac/picpac-cv.cpp', 'picpac/json11/json11.cpp'],
         depends = ['picpac/json11/json11.hpp', 'picpac/picpac.h', 'picpac/picpac-cv.h']
