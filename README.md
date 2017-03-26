@@ -13,12 +13,8 @@ Install libraries
 ```
 apt-get install libboost-all-dev libopencv-dev libglog-dev
 apt-get install libgl1-mesa-dev libglew-dev libglfw3-dev libglm-dev
-apt-get install libqt4-dev  # for building libde265, not actually used
+apt-get install libx265-dev libde265-dev
 ```
-And the following H256 libraries
-- https://bitbucket.org/multicoreware/x265/wiki/Home
-- https://github.com/strukturag/libde265
-  (with ./autogen.sh; ./configure; make; make install)
 
 Then compile with
 ```
