@@ -64,7 +64,8 @@ struct Tensor3 {
     char *data;
     npy_intp dimensions[3];
     npy_intp strides[3];
-    Tensor3 (int Z, int Y, int X, bool zero = false): own(true) {
+    float label;
+    Tensor3 (int Z, int Y, int X, bool zero = false): own(true), label(0) {
         if (zero) {
             data = (char *)calloc(Z * Y * X, sizeof(T));
         }
@@ -873,17 +874,16 @@ namespace picpac {
 
                 // nodules
                 vector<Nodule> nodules;
-                Json const &json_nodules = json["anno"];
+                Json const &json_nodules = json["shapes"];
                 if (json_nodules.is_array()) {
                     for (auto const &nod: json_nodules.array_items()) {
-                        vector<float> v;
-                        for (auto const &x: nod.array_items()) {
-                            v.push_back(x.number_value());
-                        }
-                        CHECK(v.size() == 4);
+                        CHECK(nod["type"].string_value() == "ball");
                         nodules.emplace_back();
-                        nodules.back().pos = glm::vec3(v[2]-shift[0], v[1]-shift[1], v[0]-shift[2]);
-                        nodules.back().radius = v[3];
+                        nodules.back().pos = glm::vec3(
+                                nod["x"].number_value()-shift[0],
+                                nod["y"].number_value()-shift[1],
+                                nod["z"].number_value()-shift[2]);
+                        nodules.back().radius = nod["r"].number_value();
                     }
                 }
                 // copy to ...
@@ -1040,7 +1040,7 @@ namespace picpac {
             CacheValue *c = nullptr, std::mutex *m = nullptr) const {
             Record r;
             rr(&r);
-            CHECK(r.size() > 1);
+            CHECK(r.size() >= 1);
             string err;
             Json json = Json::parse(r.field_string(1), err);
 
@@ -1083,6 +1083,7 @@ namespace picpac {
                 delete array;
                 array = oarray;
             }
+            array->label = r.meta().label;
             *out = array;
         }
     };
@@ -1092,8 +1093,10 @@ namespace picpac {
         VolumeStream (std::string const &path, Config const &config)
             : PrefetchStream(fs::path(path), config) {
         }
-        object next () {
-            return PrefetchStream<VolumeLoader>::next()->to_npy_and_delete();
+        tuple next () {
+            auto v = PrefetchStream<VolumeLoader>::next();
+            float l = v->label;
+            return make_tuple(l, v->to_npy_and_delete());
         }
     };
 
