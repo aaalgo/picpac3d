@@ -59,8 +59,26 @@ the following size configuration:
 - Input volume must be about 512x512x512.  It doesn't have to be
   exactly this.  The library will automatically clip and pad the data.
 - Each sample is of size 64x64x64.
-- Unlike PicPac, PicPac3D only supports annotations in the shape of
+- PicPac3D only supports annotations in the shape of
   balls (x, y, z, r).
+
+The library does the following data augmentation:
+- For background cubes, a sample is randomly sampled from the whole volume.
+  The library does not garantee that a negative cube doesn't cover
+  any annotation balls, but if it does, all corresponding voxels in the
+  label cube is properly set.
+- Each positive cube roughly centers around an annotation ball, with the
+  ball center randomly shifted by [-r, r] along each axis.
+- Scale = 1 means that a cube covers 64x64x64 of the original volume.
+  By setting scale=0.5, the output cube size is still 64x64x64, but
+  it covers 128x128x128 of the original volume, with more data but
+  less resolution.  Scale is randomly sampled from the range of
+  min_pert_scale and max_pert_scale.
+- A random direction is picked uniformly from a 3D unit sphere, and
+  the cube is randomly rotated by a number of degrees randomly
+  sampled from [-pert_angles, pert_angles].
+- A random delta of color value from [-pert_color1, pert_color1] is
+  added to the cube.
 
 Usage example with Tensorflow:
 ```python
@@ -94,7 +112,7 @@ Usage example with Tensorflow:
         for _ in range(FLAGS.maximal_training_steps):
             images, labels = stream.next()
             # image is 64x64x64 of 0-255.
-            # labels is 64x64x64 of 0-1.
+            # labels is 64x64x64 of 0 or 1, for training FCN-style networks
             feed_dict = {X: images, Y: labels}
             mm, _, summaries = sess.run([metrics, train_op, train_summaries], feed_dict=feed_dict)
 ```
