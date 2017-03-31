@@ -63,7 +63,7 @@ the following size configuration:
   balls (x, y, z, r).
 
 Usage example with Tensorflow:
-```
+```python
     import picpac3d
     ...
     picpac_config = dict(seed=2017,
@@ -101,7 +101,7 @@ Usage example with Tensorflow:
 
 Before streaming, volumes (numpy 3-D) arrays must be first imported into
 a database.
-```
+```python
     imporet simplejson as json
     import picpac3d
 
