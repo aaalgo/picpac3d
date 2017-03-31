@@ -120,7 +120,7 @@ Usage example with Tensorflow:
 Before streaming, volumes (numpy 3-D) arrays must be first imported into
 a database.
 ```python
-    imporet simplejson as json
+    import simplejson as json
     import picpac3d
 
     db = picpac3d.Writer(db_path) 
