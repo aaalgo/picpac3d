@@ -123,7 +123,7 @@ a database.
     imporet simplejson as json
     import picpac3d
 
-    db = picpac.Writer(db_path)
+    db = picpac3d.Writer(db_path) 
     for label, uid in all_cases:
         images = load_3d_array_of_type_uint8_of_roughly_512x512x512(uid)
         # 3D-scaling lungs to 0.8mm/pixel will be about the proper size
