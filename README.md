@@ -6,7 +6,7 @@ part of my solution for Data Science Bowl 2017.
 
 Highlights:
 - Lossless storing 8-bit volumetric data with H265.
-- On-the-fly region sampling with OpenGL.
+- On-the-fly region sampling and augmentation with OpenGL 3D texture.
 
 
 # Building on Ubuntu 16.04
