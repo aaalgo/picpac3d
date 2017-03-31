@@ -1,8 +1,8 @@
 # picpac3d
 
 This package is for sampling and streaming volumetric samples for
-training 3D convolutional neural networks.  It is designed for
-Data Science Bowl 2017.
+training 3D convolutional neural networks.  It is designed as
+part of my solution for Data Science Bowl 2017.
 
 Highlights:
 - Lossless storing 8-bit volumetric data with H265.
