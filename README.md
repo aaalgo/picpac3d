@@ -77,7 +77,7 @@ Usage example with Tensorflow:
                 stratify=True,     # stratify sampling of volumes by label
                 channels=1,
                 pert_color1=20,    # randomly +/- 0~20 to color
-                # for BOWL data, corresponds to about 2mm/pixel.
+                # for Kaggle/Luna data, corresponds to about 2mm/pixel.
                 pert_min_scale=0.45,
                 pert_max_scale=0.55,
                 # are we rotating too much?
