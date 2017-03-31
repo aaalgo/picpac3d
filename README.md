@@ -30,7 +30,7 @@ sudo python setup.py install
 
 ## Cube Stream
 ```
-threads = 1         # PicPac preload streams, must be 1.
+threads = 1         # PicPac preload threads, must be 1.
 decode_threads = 4  # H265 decoding threads.
 preload = 256       #
 samples0 = 48       
