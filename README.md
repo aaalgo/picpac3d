@@ -59,7 +59,8 @@ the following size configuration:
 - Input volume must be about 512x512x512.  It doesn't have to be
   exactly this.  The library will automatically clip and pad the data.
 - Each sample is of size 64x64x64.
-
+- Unlike PicPac, PicPac3D only supports annotations in the shape of
+  balls (x, y, z, r).
 
 Usage example with Tensorflow:
 ```
@@ -94,7 +95,9 @@ Usage example with Tensorflow:
     with tf.Session() as sess:
 
         for _ in range(FLAGS.maximal_training_steps):
-            images, labels = tr_stream.next()
+            images, labels = stream.next()
+            # image is 64x64x64 of 0-255.
+            # labels is 64x64x64 of 0-1.
             feed_dict = {X: images, Y: labels}
             mm, _, summaries = sess.run([metrics, train_op, train_summaries], feed_dict=feed_dict)
 ```
