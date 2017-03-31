@@ -107,8 +107,8 @@ a database.
 
     db = picpac.Writer(db_path)
     for label, uid in all_cases:
-        
         images = load_3d_array_of_type_uint8_of_roughly_512x512x512(uid)
+        # 3D-scaling lungs to 0.8mm/pixel will be about the proper size
         assert len(images.shape) == 3
         assert images.dtype == np.uint8
         buf1 = picpac3d.encode(images)  # buf1 is h265 
@@ -120,17 +120,18 @@ a database.
         if has_annotation(uid):     # add optional annotations
             balls = []
             for nodule in load_annotation(uid):
-                (z, y, x, r) = nodule       # all in pixels
+                (z, y, x, r) = nodule
                 balls.append({'type':'ball',
-                             'x': x,
-                             'y': y,
-                             'z': z,
-                             'r': r})
+                             'x': x,    # 0 <= x < X, same for y, z
+                             'y': y,    # x, y, z are all in pixels
+                             'z': z,    # but can be float for better
+                             'r': r})   # accuracy
                 pass
             meta['shapes'] = balls
             pass
         buf2 = json.dumps(meta)
-        # label of 0/1 is for stratified sampling
+        # label of 0/1 is for stratified sampling volumes
+        # and the meta data in buf2 will produce the actual cube labels
         db.append(label, buf1, buf2)
         pass
     pass
