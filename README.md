@@ -66,7 +66,7 @@ The library does the following data augmentation:
 - For background cubes, a sample is randomly sampled from the whole volume.
   The library does not garantee that a negative cube doesn't cover
   any annotation balls, but if it does, all corresponding voxels in the
-  label cube is properly set.
+  label cube are properly set to 1.
 - Each positive cube roughly centers around an annotation ball, with the
   ball center randomly shifted by [-r, r] along each axis.
 - Scale = 1 means that a cube covers 64x64x64 of the original volume.
@@ -95,7 +95,7 @@ Usage example with Tensorflow:
                 stratify=True,     # stratify sampling of volumes by label
                 channels=1,
                 pert_color1=20,    # randomly +/- 0~20 to color
-                # for Kaggle/Luna data, corresponds to about 2mm/pixel.
+                # for Kaggle/Luna data, corresponds to about 2 mm^3/voxel.
                 pert_min_scale=0.45,
                 pert_max_scale=0.55,
                 # are we rotating too much?
@@ -126,7 +126,7 @@ a database.
     db = picpac3d.Writer(db_path) 
     for label, uid in all_cases:
         images = load_3d_array_of_type_uint8_of_roughly_512x512x512(uid)
-        # 3D-scaling lungs to 0.8mm/pixel will be about the proper size
+        # 3D-scaling lungs to 0.8 mm^3/voxel will be about the proper size
         assert len(images.shape) == 3
         assert images.dtype == np.uint8
         buf1 = picpac3d.encode(images)  # buf1 is h265 
