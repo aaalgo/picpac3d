@@ -74,23 +74,20 @@ Usage example with Tensorflow:
                 cache=False,
                 shuffle=True,
                 reshuffle=True,
-                batch=1,
-                split=1,
-                split_fold=0,
-                stratify=True,
+                stratify=True,     # stratify sampling of volumes by label
                 channels=1,
                 pert_color1=20,    # randomly +/- 0~20 to color
                 # for BOWL data, corresponds to about 2mm/pixel.
                 pert_min_scale=0.45,
                 pert_max_scale=0.55,
                 # are we rotating too much?
-                pert_angle = 180,  # in degrees
+                pert_angle = 180,  # in degrees; is that too much?
                 samples0 = 32,     # sample 32 negative cubes
                 samples1 = 64,     # and 64 positive cubes from each volume
                 pool = 4096
                 )
 
-    stream = picpac3d.CubeStream(FLAGS.db, perturb=True, loop=True, **picpac_config)
+    stream = picpac3d.CubeStream(FLAGS.db_path, perturb=True, loop=True, **picpac_config)
     ...
     with tf.Session() as sess:
 
@@ -100,4 +97,41 @@ Usage example with Tensorflow:
             # labels is 64x64x64 of 0-1.
             feed_dict = {X: images, Y: labels}
             mm, _, summaries = sess.run([metrics, train_op, train_summaries], feed_dict=feed_dict)
+```
+
+Before streaming, volumes (numpy 3-D) arrays must be first imported into
+a database.
+```
+    imporet simplejson as json
+    import picpac3d
+
+    db = picpac.Writer(db_path)
+    for label, uid in all_cases:
+        
+        images = load_3d_array_of_type_uint8_of_roughly_512x512x512(uid)
+        assert len(images.shape) == 3
+        assert images.dtype == np.uint8
+        buf1 = picpac3d.encode(images)  # buf1 is h265 
+        Z, Y, X = images.shape
+        meta = {
+                'size': [Z, Y, X]       # add size for efficient memory
+                                        # allocation when decoding volume
+        }
+        if has_annotation(uid):     # add optional annotations
+            balls = []
+            for nodule in load_annotation(uid):
+                (z, y, x, r) = nodule       # all in pixels
+                balls.append({'type':'ball',
+                             'x': x,
+                             'y': y,
+                             'z': z,
+                             'r': r})
+                pass
+            meta['shapes'] = balls
+            pass
+        buf2 = json.dumps(meta)
+        # label of 0/1 is for stratified sampling
+        db.append(label, buf1, buf2)
+        pass
+    pass
 ```
